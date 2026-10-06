@@ -1,0 +1,116 @@
+'=====================================================================================
+' EBDA EDU – ملف العهد والمصروفات 2026-2027
+' Audit Trail – سجل التعديلات التلقائي (نسخة محدّثة للتصميم الجديد)
+'-------------------------------------------------------------------------------------
+' طريقة التفعيل (مرة واحدة):
+'  1) افتح ملف EBDA_EDU_Expense_Custody_System_2026-2027.xlsx
+'  2) اضغط Alt + F11  ← من القائمة اليسرى اختر ThisWorkbook  ← الصق هذا الكود كاملًا
+'  3) احفظ الملف بصيغة Excel Macro-Enabled Workbook (.xlsm) بنفس الاسم
+'  4) افتح ملف الموازنة: Data ▸ Edit Links ▸ Change Source ← اختر ملف .xlsm الجديد
+'     وفي ملف العهد (.xlsm): Data ▸ Edit Links ← تأكد أنه مرتبط بملف الموازنة
+'  5) يُنصح بقفل مشروع VBA بكلمة مرور: Tools ▸ VBAProject Properties ▸ Protection
+'
+' ما يفعله الكود (نفس وظائف النسخة السابقة):
+'  - يسجل كل تعديل في شيتي «عهد ومصروفات دمياط» و«عهد ومصروفات بدر» داخل AUDIT_LOG:
+'    التاريخ والوقت · اسم المستخدم · اسم الشيت · الخلية · رقم العهدة · اسم الحقل · القيمة القديمة · القيمة الجديدة
+'  - عند تغيير «موافقة المدير المباشر» إلى موافق/مرفوض  ← يكتب «تاريخ الموافقة» تلقائيًا (إذا كان فارغًا)
+'  - عند اختيار «نعم» في «تمت التسوية مع الحسابات؟»      ← يكتب «تاريخ التسوية» تلقائيًا (إذا كان فارغًا)
+'  - عند تغيير «حالة العهدة» إلى «تمت التسوية»          ← يكتب «تاريخ التسوية» للعهدة تلقائيًا (إذا كان فارغًا)
+'  التغيير الوحيد عن النسخة السابقة: أُزيلت تعبئة أعمدة «سُجّل بواسطة / آخر تعديل» لأن هذه الأعمدة
+'  حُذفت من التصميم المبسط – نفس المعلومة موجودة في AUDIT_LOG (المستخدم + الوقت لكل تعديل).
+'=====================================================================================
+Option Explicit
+
+Private Const SHEET_PW As String = "EBDA2026"
+Private Const HDR_ROW As Long = 7
+Private Const COL_ID As String = "B"
+Private Const COL_APPROVAL As String = "I"
+Private Const COL_APPROVAL_DATE As String = "J"
+Private Const COL_SETTLED As String = "K"
+Private Const COL_CUST_STATUS As String = "L"
+Private Const COL_SETTLE_DATE As String = "M"
+Private oldVals As Object
+
+' Only sheets 1 and 2 (custody & expenses: Damietta / Badr). Sheet order is locked by workbook protection.
+Private Function Tracked(ByVal Sh As Object) As Boolean
+    Tracked = (Sh.Index <= 2)
+End Function
+
+' Arabic values written as ChrW codes so the macro works on any Windows language setting
+Private Function T_APPROVED() As String
+    T_APPROVED = ChrW(1605) & ChrW(1608) & ChrW(1575) & ChrW(1601) & ChrW(1602)
+End Function
+Private Function T_REJECTED() As String
+    T_REJECTED = ChrW(1605) & ChrW(1585) & ChrW(1601) & ChrW(1608) & ChrW(1590)
+End Function
+Private Function T_YES() As String
+    T_YES = ChrW(1606) & ChrW(1593) & ChrW(1605)
+End Function
+Private Function T_SETTLED() As String
+    T_SETTLED = ChrW(1578) & ChrW(1605) & ChrW(1578) & ChrW(32) & ChrW(1575) & ChrW(1604) & ChrW(1578) & ChrW(1587) & ChrW(1608) & ChrW(1610) & ChrW(1577)
+End Function
+
+Private Sub Workbook_SheetSelectionChange(ByVal Sh As Object, ByVal Target As Range)
+    If Not Tracked(Sh) Then Exit Sub
+    Set oldVals = CreateObject("Scripting.Dictionary")
+    If Target.CountLarge > 2000 Then Exit Sub
+    Dim c As Range
+    For Each c In Target.Cells
+        oldVals(c.Address) = c.Value
+    Next c
+End Sub
+
+Private Sub Workbook_SheetChange(ByVal Sh As Object, ByVal Target As Range)
+    If Not Tracked(Sh) Then Exit Sub
+    If Target.CountLarge > 2000 Then Exit Sub
+
+    Dim lg As Worksheet, c As Range, r As Long, oldV As Variant, who As String
+    Set lg = Me.Worksheets("AUDIT_LOG")
+    who = Application.UserName
+    If Environ("USERNAME") <> "" Then who = who & " (" & Environ("USERNAME") & ")"
+
+    Application.EnableEvents = False
+    On Error GoTo CleanUp
+    lg.Unprotect SHEET_PW
+    Sh.Unprotect SHEET_PW
+
+    For Each c In Target.Cells
+        If c.Row > HDR_ROW Then
+            oldV = ""
+            If Not oldVals Is Nothing Then
+                If oldVals.Exists(c.Address) Then oldV = oldVals(c.Address)
+            End If
+            If CStr(oldV) <> CStr(c.Value) Then
+                r = lg.Cells(lg.Rows.Count, 1).End(xlUp).Row + 1
+                If r <= 4 Then r = 5
+                lg.Cells(r, 1).Value = Now
+                lg.Cells(r, 1).NumberFormat = "dd/mm/yyyy hh:mm:ss"
+                lg.Cells(r, 2).Value = who
+                lg.Cells(r, 3).Value = Sh.Name
+                lg.Cells(r, 4).Value = c.Address(False, False)
+                lg.Cells(r, 5).Value = Sh.Range(COL_ID & c.Row).Value
+                lg.Cells(r, 6).Value = Replace(CStr(Sh.Cells(HDR_ROW, c.Column).Value), vbLf, " ")
+                lg.Cells(r, 7).Value = "'" & CStr(oldV)
+                lg.Cells(r, 8).Value = "'" & CStr(c.Value)
+                If c.Column = Sh.Range(COL_APPROVAL & "1").Column Then
+                    If (c.Value = T_APPROVED Or c.Value = T_REJECTED) And Sh.Range(COL_APPROVAL_DATE & c.Row).Value = "" Then _
+                        Sh.Range(COL_APPROVAL_DATE & c.Row).Value = Date
+                End If
+                If c.Column = Sh.Range(COL_SETTLED & "1").Column Then
+                    If c.Value = T_YES And Sh.Range(COL_SETTLE_DATE & c.Row).Value = "" Then _
+                        Sh.Range(COL_SETTLE_DATE & c.Row).Value = Date
+                End If
+                If c.Column = Sh.Range(COL_CUST_STATUS & "1").Column Then
+                    If c.Value = T_SETTLED And Sh.Range(COL_SETTLE_DATE & c.Row).Value = "" Then _
+                        Sh.Range(COL_SETTLE_DATE & c.Row).Value = Date
+                End If
+            End If
+        End If
+    Next c
+
+CleanUp:
+    Sh.Protect Password:=SHEET_PW, AllowFormattingColumns:=True, AllowFiltering:=True
+    lg.Protect Password:=SHEET_PW
+    Application.EnableEvents = True
+    Workbook_SheetSelectionChange Sh, Target
+End Sub
